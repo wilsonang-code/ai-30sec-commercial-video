@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { StatusBadge } from "@/app/components/StatusBadge";
 import type { Brief, Story } from "@/lib/types";
+import { GenerateStoryButton } from "./GenerateStoryButton";
 
 export default async function BriefDetailPage({
   params,
@@ -79,6 +80,9 @@ export default async function BriefDetailPage({
             <p className="text-sm text-neutral-500">
               No story generated yet for this brief.
             </p>
+            <div className="mt-4 flex justify-center">
+              <GenerateStoryButton briefId={brief.id} />
+            </div>
           </div>
         )}
 
