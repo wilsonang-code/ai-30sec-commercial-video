@@ -1,30 +1,56 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { StatusBadge } from "@/app/components/StatusBadge";
+import { KpiCards } from "@/app/components/KpiCards";
+import { RealtimeJobsTable, type DashboardRow } from "@/app/components/RealtimeJobsTable";
 
-type DashboardRow = {
+type AttentionScene = {
   id: string;
-  status: string;
-  provider: string;
-  output_url: string | null;
-  created_at: string;
-  stories: {
-    id: string;
-    title: string;
-    briefs: { id: string; brand_name: string; product: string } | null;
-  } | null;
+  sequence: number;
+  visual_prompt: string;
+  visual_prompt_confidence: number | null;
+  story_id: string;
+  stories: { title: string } | null;
 };
 
 export default async function DashboardPage() {
   const supabase = await createClient();
 
-  const { data: jobs, error } = await supabase
-    .from("video_jobs")
-    .select(
-      "id, status, provider, output_url, created_at, stories ( id, title, briefs ( id, brand_name, product ) )",
-    )
-    .order("created_at", { ascending: false })
-    .returns<DashboardRow[]>();
+  const [
+    { data: jobs, error },
+    { count: totalJobs },
+    { count: completedJobs },
+    { data: reviews },
+    { count: scenesNeedingReview },
+    { data: attentionScenes },
+  ] = await Promise.all([
+    supabase
+      .from("video_jobs")
+      .select(
+        "id, status, provider, output_url, created_at, stories ( id, title, briefs ( id, brand_name, product ) )",
+      )
+      .order("created_at", { ascending: false })
+      .returns<DashboardRow[]>(),
+    supabase.from("video_jobs").select("*", { count: "exact", head: true }),
+    supabase
+      .from("video_jobs")
+      .select("*", { count: "exact", head: true })
+      .eq("status", "completed"),
+    supabase.from("reviews").select("decision"),
+    supabase
+      .from("scenes")
+      .select("*", { count: "exact", head: true })
+      .eq("visual_prompt_review_status", "unreviewed"),
+    supabase
+      .from("scenes")
+      .select("id, sequence, visual_prompt, visual_prompt_confidence, story_id, stories ( title )")
+      .eq("visual_prompt_review_status", "unreviewed")
+      .order("visual_prompt_confidence", { ascending: true })
+      .limit(5)
+      .returns<AttentionScene[]>(),
+  ]);
+
+  const acceptedCount = reviews?.filter((r) => r.decision === "accepted").length ?? 0;
+  const acceptanceRate = reviews && reviews.length > 0 ? acceptedCount / reviews.length : null;
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-10">
@@ -43,85 +69,54 @@ export default async function DashboardPage() {
         </Link>
       </div>
 
+      <div className="mt-6">
+        <KpiCards
+          total={totalJobs ?? 0}
+          completed={completedJobs ?? 0}
+          acceptanceRate={acceptanceRate}
+          scenesNeedingReview={scenesNeedingReview ?? 0}
+        />
+      </div>
+
       {error && (
         <div className="mt-8 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">
           Couldn&apos;t load video jobs — try refreshing the page.
         </div>
       )}
 
-      {!error && jobs && jobs.length === 0 && (
-        <div className="mt-10 rounded-lg border border-dashed border-neutral-300 p-12 text-center">
-          <p className="text-neutral-600">
-            No videos yet — create your first Brief.
-          </p>
-          <Link
-            href="/briefs/new"
-            className="mt-4 inline-block rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700"
-          >
-            Create Brief
-          </Link>
-        </div>
-      )}
+      {!error && <RealtimeJobsTable initialJobs={jobs ?? []} />}
 
-      {!error && jobs && jobs.length > 0 && (
-        <div className="mt-8 overflow-hidden rounded-lg border border-neutral-200 bg-white">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-neutral-200 bg-neutral-50 text-xs uppercase text-neutral-500">
-              <tr>
-                <th className="px-4 py-3 font-medium">Brand / Product</th>
-                <th className="px-4 py-3 font-medium">Story</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Provider</th>
-                <th className="px-4 py-3 font-medium">Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((job) => (
-                <tr
-                  key={job.id}
-                  className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50"
+      {attentionScenes && attentionScenes.length > 0 && (
+        <section className="mt-10">
+          <h2 className="text-lg font-semibold">Reviewer attention queue</h2>
+          <p className="text-sm text-neutral-500">
+            Lowest-confidence scenes awaiting review.
+          </p>
+          <ul className="mt-3 space-y-2">
+            {attentionScenes.map((scene) => (
+              <li key={scene.id}>
+                <Link
+                  href={`/stories/${scene.story_id}`}
+                  className="flex items-center justify-between rounded-lg border border-neutral-200 bg-white px-4 py-3 hover:border-neutral-400"
                 >
-                  <td className="px-4 py-3">
-                    {job.stories?.briefs ? (
-                      <Link
-                        href={`/briefs/${job.stories.briefs.id}`}
-                        className="font-medium hover:underline"
-                      >
-                        {job.stories.briefs.brand_name}
-                        <span className="ml-1 font-normal text-neutral-400">
-                          · {job.stories.briefs.product}
-                        </span>
-                      </Link>
-                    ) : (
-                      <span className="text-neutral-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    {job.stories ? (
-                      <Link
-                        href={`/video-jobs/${job.id}`}
-                        className="hover:underline"
-                      >
-                        {job.stories.title}
-                      </Link>
-                    ) : (
-                      <span className="text-neutral-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={job.status} />
-                  </td>
-                  <td className="px-4 py-3 capitalize text-neutral-600">
-                    {job.provider}
-                  </td>
-                  <td className="px-4 py-3 text-neutral-500">
-                    {new Date(job.created_at).toLocaleDateString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  <span className="text-sm">
+                    <span className="font-medium">
+                      {scene.stories?.title ?? "Untitled story"}
+                    </span>{" "}
+                    <span className="text-neutral-400">
+                      · Scene {scene.sequence}
+                    </span>
+                  </span>
+                  <span className="text-xs text-amber-700">
+                    {scene.visual_prompt_confidence != null
+                      ? `${Math.round(scene.visual_prompt_confidence * 100)}%`
+                      : "—"}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
     </main>
   );

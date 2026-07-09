@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import type { VideoJob, Scene, Story } from "@/lib/types";
+import type { VideoJob, Scene, Story, Review } from "@/lib/types";
 import { JobStatusPoller } from "./JobStatusPoller";
+import { ReviewForm } from "./ReviewForm";
 
 export default async function VideoJobDetailPage({
   params,
@@ -22,12 +23,20 @@ export default async function VideoJobDetailPage({
     notFound();
   }
 
-  const { data: scenes } = await supabase
-    .from("scenes")
-    .select("*")
-    .eq("story_id", job.story_id)
-    .order("sequence")
-    .returns<Scene[]>();
+  const [{ data: scenes }, { data: reviews }] = await Promise.all([
+    supabase
+      .from("scenes")
+      .select("*")
+      .eq("story_id", job.story_id)
+      .order("sequence")
+      .returns<Scene[]>(),
+    supabase
+      .from("reviews")
+      .select("*")
+      .eq("video_job_id", id)
+      .order("created_at", { ascending: false })
+      .returns<Review[]>(),
+  ]);
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -81,7 +90,14 @@ export default async function VideoJobDetailPage({
         </section>
       )}
 
-      <div id="review-section" className="mt-8" />
+      {job.status === "completed" && (
+        <section className="mt-8">
+          <h2 className="text-lg font-semibold">Review</h2>
+          <div className="mt-3">
+            <ReviewForm videoJobId={job.id} existingReviews={reviews ?? []} />
+          </div>
+        </section>
+      )}
     </main>
   );
 }
