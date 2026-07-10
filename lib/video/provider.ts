@@ -1,27 +1,38 @@
 import type { Scene, VideoJobStatus } from "@/lib/types";
 
 const DEMO_OUTPUT_URL = "https://www.w3schools.com/html/mov_bbb.mp4";
+const REPLICATE_MODEL = "minimax/video-01";
+
+function combinedPrompt(scenes: Scene[]): string {
+  return scenes
+    .sort((a, b) => a.sequence - b.sequence)
+    .map((s) => s.visual_prompt)
+    .join(" Then, ");
+}
 
 export async function submitVideoJob(
   scenes: Scene[],
 ): Promise<{ provider: string; externalJobId: string }> {
-  if (process.env.RUNWAY_API_KEY) {
-    const res = await fetch("https://api.runwayml.com/v1/image_to_video", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.RUNWAY_API_KEY}`,
+  if (process.env.REPLICATE_API_TOKEN) {
+    const res = await fetch(
+      `https://api.replicate.com/v1/models/${REPLICATE_MODEL}/predictions`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.REPLICATE_API_TOKEN}`,
+        },
+        body: JSON.stringify({
+          input: { prompt: combinedPrompt(scenes) },
+        }),
       },
-      body: JSON.stringify({
-        prompts: scenes.map((s) => s.visual_prompt),
-      }),
-    });
-    if (!res.ok) throw new Error(`Runway submit failed: ${res.status}`);
+    );
+    if (!res.ok) throw new Error(`Replicate submit failed: ${res.status}`);
     const json = await res.json();
-    return { provider: "runway", externalJobId: json.id };
+    return { provider: "minimax", externalJobId: json.id };
   }
 
-  return { provider: "runway", externalJobId: `sim_${crypto.randomUUID()}` };
+  return { provider: "minimax", externalJobId: `sim_${crypto.randomUUID()}` };
 }
 
 export async function checkVideoJobStatus(job: {
@@ -30,15 +41,20 @@ export async function checkVideoJobStatus(job: {
   external_job_id: string | null;
   created_at: string;
 }): Promise<{ status: VideoJobStatus; output_url?: string; error_message?: string }> {
-  if (process.env.RUNWAY_API_KEY && !job.external_job_id?.startsWith("sim_")) {
+  if (process.env.REPLICATE_API_TOKEN && !job.external_job_id?.startsWith("sim_")) {
     const res = await fetch(
-      `https://api.runwayml.com/v1/tasks/${job.external_job_id}`,
-      { headers: { Authorization: `Bearer ${process.env.RUNWAY_API_KEY}` } },
+      `https://api.replicate.com/v1/predictions/${job.external_job_id}`,
+      { headers: { Authorization: `Bearer ${process.env.REPLICATE_API_TOKEN}` } },
     );
-    if (!res.ok) return { status: "failed", error_message: `Runway status check failed: ${res.status}` };
+    if (!res.ok)
+      return { status: "failed", error_message: `Replicate status check failed: ${res.status}` };
     const json = await res.json();
-    if (json.status === "SUCCEEDED") return { status: "completed", output_url: json.output?.[0] };
-    if (json.status === "FAILED") return { status: "failed", error_message: json.failure ?? "Runway job failed" };
+    if (json.status === "succeeded") {
+      const output = Array.isArray(json.output) ? json.output[0] : json.output;
+      return { status: "completed", output_url: output };
+    }
+    if (json.status === "failed" || json.status === "canceled")
+      return { status: "failed", error_message: json.error ?? "Replicate job failed" };
     return { status: "processing" };
   }
 
